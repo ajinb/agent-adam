@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+venv/
+.venv/
+credentials.json
+token.json
+screenshots/
+.claude/
+Documentation.pdf
+Documentation.md
+Requirements.md
+project-info.md
+mdpdf.log
