@@ -15,6 +15,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from localtime import LOCAL_TIMEZONE, day_bounds, local_now
+
 # Scopes required for Calendar, Gmail, and Tasks
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -24,6 +26,7 @@ SCOPES = [
 
 CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "credentials.json")
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.json")
+
 
 
 # ---------------------------------------------------------------------------
@@ -82,21 +85,19 @@ class GoogleCalendar:
 
     def get_events(self, date_str: str | None = None, max_results: int = 20) -> list[dict]:
         """Get calendar events. If date_str given (YYYY-MM-DD), get events for that day."""
-        tz = "America/Denver"
-        tz_offset = "-07:00"
         if date_str:
-            time_min = f"{date_str}T00:00:00{tz_offset}"
-            time_max = f"{date_str}T23:59:59{tz_offset}"
+            start, end = day_bounds(date_str)
         else:
-            now = datetime.now()
-            time_min = now.strftime(f"%Y-%m-%dT%H:%M:%S{tz_offset}")
-            time_max = (now + timedelta(days=7)).strftime(f"%Y-%m-%dT%H:%M:%S{tz_offset}")
+            start = local_now()
+            end = start + timedelta(days=7)
+        time_min = start.isoformat()
+        time_max = end.isoformat()
 
         result = self.service.events().list(
             calendarId="primary",
             timeMin=time_min,
             timeMax=time_max,
-            timeZone=tz,
+            timeZone=LOCAL_TIMEZONE,
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime",
@@ -126,11 +127,11 @@ class GoogleCalendar:
             "description": description,
             "start": {
                 "dateTime": f"{date}T{start_time}:00",
-                "timeZone": "America/Denver",
+                "timeZone": LOCAL_TIMEZONE,
             },
             "end": {
                 "dateTime": f"{date}T{end_time}:00",
-                "timeZone": "America/Denver",
+                "timeZone": LOCAL_TIMEZONE,
             },
         }
         created = self.service.events().insert(calendarId="primary", body=event_body).execute()
