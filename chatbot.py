@@ -3,11 +3,13 @@ Core chatbot logic — Claude API with tool-use for calendar, email, tasks, and 
 """
 
 import json
+import os
 from datetime import datetime
 
 import anthropic
 from duckduckgo_search import DDGS
 
+from localtime import local_now
 from mock_data import DataStore
 
 # ---------------------------------------------------------------------------
@@ -216,6 +218,15 @@ UNTRUSTED_RESULT_TOOLS = frozenset({"get_emails", "web_search"})
 # converge otherwise bills indefinitely.
 MAX_TOOL_ITERATIONS = 10
 
+# claude-sonnet-4-20250514 was pinned here and reached its published retirement
+# date on 2026-06-15. claude-sonnet-5 is the documented replacement, keeping the
+# same Sonnet tier. Override with AGENT_ADAM_MODEL.
+DEFAULT_MODEL = os.getenv("AGENT_ADAM_MODEL", "claude-sonnet-5")
+
+# Sonnet 5 runs adaptive thinking by default, and max_tokens caps thinking plus
+# response text together — 1024 truncated mid-answer.
+MAX_TOKENS = int(os.getenv("AGENT_ADAM_MAX_TOKENS", "4096"))
+
 
 def _describe_action(tool_name: str, tool_input: dict) -> str:
     """One-line, human-readable summary of a queued destructive action."""
@@ -347,7 +358,7 @@ def _web_search(query: str, max_results: int = 5) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
-         model: str = "claude-sonnet-4-20250514",
+         model: str | None = None,
          pending_actions: list[dict] | None = None,
          max_iterations: int = MAX_TOOL_ITERATIONS) -> tuple[str, list[dict], list[dict]]:
     """
@@ -359,13 +370,14 @@ def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
 
     Returns (final_text_response, updated_messages, pending_actions).
     """
-    system = SYSTEM_PROMPT.format(today=datetime.now().strftime("%A, %B %d, %Y"))
+    model = model or DEFAULT_MODEL
+    system = SYSTEM_PROMPT.format(today=local_now().strftime("%A, %B %d, %Y"))
     if pending_actions is None:
         pending_actions = []
 
     response = client.messages.create(
         model=model,
-        max_tokens=1024,
+        max_tokens=MAX_TOKENS,
         system=system,
         tools=TOOLS,
         messages=messages,
@@ -406,7 +418,7 @@ def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
         # Call Claude again with tool results
         response = client.messages.create(
             model=model,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS,
             system=system,
             tools=TOOLS,
             messages=messages,
