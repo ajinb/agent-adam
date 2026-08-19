@@ -12,7 +12,7 @@ import anthropic
 from dotenv import load_dotenv
 
 from google_integration import GoogleDataStore, get_credentials, is_authenticated
-from chatbot import chat
+from chatbot import approve_pending_action, chat
 
 load_dotenv()
 
@@ -60,6 +60,11 @@ if "messages" not in st.session_state:
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+
+# Deletions the assistant requested. Nothing here has happened yet — each entry
+# waits for the user to approve or discard it below the chat.
+if "pending_actions" not in st.session_state:
+    st.session_state.pending_actions = []
 
 # ---------------------------------------------------------------------------
 # API key handling
@@ -179,7 +184,9 @@ def sidebar_dashboard():
 with st.sidebar:
     st.title("🤖 Agent Adam")
     st.caption("Your personal life-management assistant")
-    st.caption("📧 adamtheagent007@gmail.com")
+    account_label = os.getenv("AGENT_ADAM_ACCOUNT_LABEL", "")
+    if account_label:
+        st.caption(f"📧 {account_label}")
     st.divider()
     sidebar_dashboard()
 
@@ -205,6 +212,32 @@ if not st.session_state.chat_history:
         )
         st.markdown(welcome)
 
+# ---------------------------------------------------------------------------
+# Pending deletions — the assistant can request these but never perform them
+# ---------------------------------------------------------------------------
+if st.session_state.pending_actions:
+    st.divider()
+    st.subheader("⚠️ Waiting for your approval")
+    st.caption(
+        "Agent Adam asked to delete the following. Nothing has been deleted yet — "
+        "these only happen if you approve them here."
+    )
+    for idx, action in enumerate(list(st.session_state.pending_actions)):
+        col_desc, col_ok, col_no = st.columns([6, 1, 1])
+        col_desc.markdown(f"**{action['summary']}**")
+        if col_ok.button("Approve", key=f"approve_{idx}", use_container_width=True):
+            try:
+                approve_pending_action(action, st.session_state.store)
+                st.session_state.pending_actions.pop(idx)
+                st.success(f"Done: {action['summary']}")
+            except Exception as e:
+                st.error(f"Could not complete that: {e}")
+            st.rerun()
+        if col_no.button("Discard", key=f"discard_{idx}", use_container_width=True):
+            st.session_state.pending_actions.pop(idx)
+            st.info(f"Discarded: {action['summary']}")
+            st.rerun()
+
 # Chat input
 if prompt := st.chat_input("What's on your mind?"):
     st.session_state.chat_history.append({"role": "user", "content": prompt})
@@ -216,12 +249,14 @@ if prompt := st.chat_input("What's on your mind?"):
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                response_text, updated_messages = chat(
+                response_text, updated_messages, pending = chat(
                     client=client,
                     messages=st.session_state.messages,
                     store=st.session_state.store,
+                    pending_actions=st.session_state.pending_actions,
                 )
                 st.session_state.messages = updated_messages
+                st.session_state.pending_actions = pending
                 st.markdown(response_text)
                 st.session_state.chat_history.append({"role": "assistant", "content": response_text})
             except Exception as e:
