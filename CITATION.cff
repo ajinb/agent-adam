@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+title: "agent-adam"
+message: "If you use this software, please cite it using the metadata below."
+type: software
+authors:
+  - family-names: Baby
+    given-names: Ajin
+    orcid: "https://orcid.org/0009-0007-6190-9516"
+repository-code: "https://github.com/ajinb/agent-adam"
+url: "https://cloudandsre.com"
+abstract: "Agent Adam - your personal assistant."
+license: Apache-2.0
+version: "unreleased"
+date-released: "2026-11-03"
+keywords:
+  - personal-assistant
+  - llm
+  - streamlit
+  - google-workspace
