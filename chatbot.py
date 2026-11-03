@@ -4,7 +4,6 @@ Core chatbot logic — Claude API with tool-use for calendar, email, tasks, and 
 
 import json
 import os
-from datetime import datetime
 
 import anthropic
 from duckduckgo_search import DDGS
@@ -28,7 +27,7 @@ SYSTEM_PROMPT = """You are **Agent Adam**, a personal life-management assistant 
 ## Your capabilities
 You help the user manage their day-to-day life across three areas:
 1. **Google Calendar** — View, create, and delete real calendar events
-2. **Gmail** — View inbox, check unread messages, mark as read
+2. **Gmail** — {gmail_capabilities}
 3. **Google Tasks** — View, create, update status, and delete tasks
 4. **Web Search** — Look up information online when the user asks a question you can't answer from their data
 
@@ -206,6 +205,12 @@ TOOLS = [
 # Tool execution
 # ---------------------------------------------------------------------------
 
+# mark_email_read needs the gmail.modify scope. Offering it on a read-only token
+# meant every call failed with a 403 that surfaced as a quiet "success: false".
+GMAIL_WRITE = os.getenv("AGENT_ADAM_GMAIL_WRITE") == "1"
+if not GMAIL_WRITE:
+    TOOLS = [t for t in TOOLS if t["name"] != "mark_email_read"]
+
 # Tools that destroy user data. The model may *request* these; it can never
 # perform them. Requests are queued for the user to approve in the UI.
 DESTRUCTIVE_TOOLS = frozenset({"delete_calendar_event", "delete_task"})
@@ -218,14 +223,33 @@ UNTRUSTED_RESULT_TOOLS = frozenset({"get_emails", "web_search"})
 # converge otherwise bills indefinitely.
 MAX_TOOL_ITERATIONS = 10
 
-# claude-sonnet-4-20250514 was pinned here and reached its published retirement
-# date on 2026-06-15. claude-sonnet-5 is the documented replacement, keeping the
-# same Sonnet tier. Override with AGENT_ADAM_MODEL.
-DEFAULT_MODEL = os.getenv("AGENT_ADAM_MODEL", "claude-sonnet-5")
+# Current Sonnet; same tier as the claude-sonnet-5 it replaces, same price.
+# Override with AGENT_ADAM_MODEL.
+DEFAULT_MODEL = os.getenv("AGENT_ADAM_MODEL", "claude-sonnet-5-5")
 
-# Sonnet 5 runs adaptive thinking by default, and max_tokens caps thinking plus
-# response text together — 1024 truncated mid-answer.
-MAX_TOKENS = int(os.getenv("AGENT_ADAM_MAX_TOKENS", "4096"))
+# Adaptive thinking is on by default, and max_tokens caps thinking plus
+# response text together.
+MAX_TOKENS = int(os.getenv("AGENT_ADAM_MAX_TOKENS", "8000"))
+
+# Models that accept the server-side refusal fallback (`fallbacks: "default"`).
+_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
+
+
+def _create(client, model: str, system: str, messages: list[dict]):
+    """One request. The tools and system prompt are identical on every call of a
+    conversation, so top-level automatic caching bills them once per cache window
+    instead of on every tool round trip."""
+    extra = {"betas": [_FALLBACK_BETA], "fallbacks": "default"} if model in _FALLBACK_MODELS else {}
+    return client.beta.messages.create(
+        model=model,
+        max_tokens=MAX_TOKENS,
+        system=system,
+        tools=TOOLS,
+        messages=messages,
+        cache_control={"type": "ephemeral"},
+        **extra,
+    )
 
 
 def _describe_action(tool_name: str, tool_input: dict) -> str:
@@ -371,17 +395,18 @@ def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
     Returns (final_text_response, updated_messages, pending_actions).
     """
     model = model or DEFAULT_MODEL
-    system = SYSTEM_PROMPT.format(today=local_now().strftime("%A, %B %d, %Y"))
+    system = SYSTEM_PROMPT.format(
+        today=local_now().strftime("%A, %B %d, %Y"),
+        gmail_capabilities=(
+            "View inbox, check unread messages, mark as read"
+            if GMAIL_WRITE
+            else "View inbox and check unread messages (read-only access)"
+        ),
+    )
     if pending_actions is None:
         pending_actions = []
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=MAX_TOKENS,
-        system=system,
-        tools=TOOLS,
-        messages=messages,
-    )
+    response = _create(client, model, system, messages)
 
     # Agentic loop: keep going while Claude wants to use tools, up to the cap.
     iterations = 0
@@ -416,12 +441,15 @@ def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
         messages.append({"role": "user", "content": tool_results})
 
         # Call Claude again with tool results
-        response = client.messages.create(
-            model=model,
-            max_tokens=MAX_TOKENS,
-            system=system,
-            tools=TOOLS,
-            messages=messages,
+        response = _create(client, model, system, messages)
+
+    if response.stop_reason == "refusal":
+        messages.append({"role": "assistant", "content": response.content})
+        return (
+            "I can't help with that one. Try rephrasing, or ask me about your calendar, "
+            "email or tasks.",
+            messages,
+            pending_actions,
         )
 
     # Extract final text response

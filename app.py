@@ -5,7 +5,7 @@ Connected to Google Calendar, Gmail, and Google Tasks.
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import streamlit as st
 import anthropic
@@ -102,7 +102,6 @@ def sidebar_dashboard():
         else:
             st.caption("No events today — enjoy the free time!")
     except Exception as e:
-        today_events = []
         st.caption(f"Could not load events: {e}")
 
     st.divider()
@@ -153,7 +152,6 @@ def sidebar_dashboard():
         else:
             st.caption("No important unread emails! 🎉")
     except Exception as e:
-        important_unread = []
         st.caption(f"Could not load emails: {e}")
 
     st.divider()
@@ -170,7 +168,6 @@ def sidebar_dashboard():
         else:
             st.caption("All tasks done! 🏆")
     except Exception as e:
-        open_tasks = []
         st.caption(f"Could not load tasks: {e}")
 
     st.divider()

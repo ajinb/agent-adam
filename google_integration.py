@@ -3,29 +3,32 @@ Google API integration — Calendar, Gmail, and Tasks.
 Replaces mock_data.py with real Google Workspace data.
 """
 
-import os
 import json
-import base64
-import re
-from datetime import datetime, timedelta
-from email.mime.text import MIMEText
+import os
+from datetime import timedelta
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+import token_store
 from localtime import LOCAL_TIMEZONE, day_bounds, local_now
 
-# Scopes required for Calendar, Gmail, and Tasks
+# Gmail is read-only unless the user opts in to label changes (mark as read).
+# gmail.modify still cannot send or permanently delete mail. Changing this
+# setting needs a fresh sign-in: the stored token carries the old scopes.
+GMAIL_WRITE = os.getenv("AGENT_ADAM_GMAIL_WRITE") == "1"
+
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify"
+    if GMAIL_WRITE
+    else "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/tasks",
 ]
 
 CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "credentials.json")
-TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.json")
 
 
 
@@ -37,8 +40,9 @@ def get_credentials() -> Credentials:
     """Get valid Google OAuth credentials, prompting login if needed."""
     creds = None
 
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    stored = token_store.load()
+    if stored:
+        creds = Credentials.from_authorized_user_info(stored, SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -51,24 +55,23 @@ def get_credentials() -> Credentials:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
 
-        with open(TOKEN_FILE, "w") as f:
-            f.write(creds.to_json())
+        token_store.save(json.loads(creds.to_json()))
 
     return creds
 
 
 def is_authenticated() -> bool:
     """Check if we have valid stored credentials."""
-    if not os.path.exists(TOKEN_FILE):
+    stored = token_store.load()
+    if not stored:
         return False
     try:
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        creds = Credentials.from_authorized_user_info(stored, SCOPES)
         if creds and creds.valid:
             return True
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            with open(TOKEN_FILE, "w") as f:
-                f.write(creds.to_json())
+            token_store.save(json.loads(creds.to_json()))
             return True
     except Exception:
         return False
@@ -189,7 +192,7 @@ class GoogleMail:
                 "date": headers.get("Date", ""),
                 "snippet": msg.get("snippet", ""),
                 "read": "UNREAD" not in labels,
-                "labels": [l for l in labels if l not in ("INBOX", "UNREAD", "CATEGORY_PERSONAL", "CATEGORY_UPDATES", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL")],
+                "labels": [lbl for lbl in labels if lbl not in ("INBOX", "UNREAD", "CATEGORY_PERSONAL", "CATEGORY_UPDATES", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL")],
             })
         return emails
 
