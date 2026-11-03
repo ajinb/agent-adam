@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8
+ruff>=0.16,<0.18
+bandit>=1.8
+pip-audit>=2.7

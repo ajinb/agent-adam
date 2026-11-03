@@ -3,7 +3,6 @@ Mock data layer simulating Google Calendar, Gmail, and Notion-style tasks.
 This serves as the prototype data source before real API integrations.
 """
 
-import json
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------------------------
