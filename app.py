@@ -212,6 +212,12 @@ if not st.session_state.chat_history:
 # ---------------------------------------------------------------------------
 # Pending deletions — the assistant can request these but never perform them
 # ---------------------------------------------------------------------------
+# st.rerun() throws away whatever the run that called it drew, so the outcome of
+# an approve or discard is carried across the rerun and shown once, here.
+if notice := st.session_state.pop("approval_notice", None):
+    level, text = notice
+    getattr(st, level)(text)
+
 if st.session_state.pending_actions:
     st.divider()
     st.subheader("⚠️ Waiting for your approval")
@@ -225,14 +231,18 @@ if st.session_state.pending_actions:
         if col_ok.button("Approve", key=f"approve_{idx}", use_container_width=True):
             try:
                 approve_pending_action(action, st.session_state.store)
-                st.session_state.pending_actions.pop(idx)
-                st.success(f"Done: {action['summary']}")
             except Exception as e:
-                st.error(f"Could not complete that: {e}")
+                st.session_state.approval_notice = (
+                    "error",
+                    f"Could not complete that, so it is still waiting for you: {e}",
+                )
+            else:
+                st.session_state.pending_actions.pop(idx)
+                st.session_state.approval_notice = ("success", f"Done: {action['summary']}")
             st.rerun()
         if col_no.button("Discard", key=f"discard_{idx}", use_container_width=True):
             st.session_state.pending_actions.pop(idx)
-            st.info(f"Discarded: {action['summary']}")
+            st.session_state.approval_notice = ("info", f"Discarded: {action['summary']}")
             st.rerun()
 
 # Chat input

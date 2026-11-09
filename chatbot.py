@@ -310,9 +310,22 @@ def execute_tool(
     return payload
 
 
+class ActionFailed(Exception):
+    """An action the user approved did not take effect."""
+
+
 def approve_pending_action(action: dict, store: DataStore) -> str:
-    """Execute a queued destructive action after the user approved it in the UI."""
-    return _dispatch_tool(action["tool"], action["input"], store)
+    """Execute a queued destructive action after the user approved it in the UI.
+
+    Raises ActionFailed if it did not happen, so the caller can keep it queued.
+    """
+    payload = _dispatch_tool(action["tool"], action["input"], store)
+    result = json.loads(payload)
+    if "error" in result:
+        raise ActionFailed(result["error"])
+    if result.get("deleted") is False:
+        raise ActionFailed("The delete did not go through. Try again, or discard this if it is already gone.")
+    return payload
 
 
 def _dispatch_tool(tool_name: str, tool_input: dict, store: DataStore) -> str:
@@ -381,6 +394,22 @@ def _web_search(query: str, max_results: int = 5) -> list[dict]:
 # Chat function (agentic loop with tool use)
 # ---------------------------------------------------------------------------
 
+def _keep_turn(messages: list[dict], content: list) -> None:
+    """Add a finished model turn to the history if the API will accept it back.
+
+    A tool_use block must be answered by a tool_result in the next message, so a
+    turn that ended with a call still open (a reply cut off by max_tokens or a
+    refusal) can't be stored: every later request would fail with a 400 until the
+    chat was cleared. A turn with no text, which is what a bare refusal or a reply
+    cut off while thinking leaves, is rejected too. Leaving one out is safe: the
+    API combines the consecutive user messages this creates.
+    """
+    has_open_call = any(block.type == "tool_use" for block in content)
+    has_text = any(block.type == "text" and block.text.strip() for block in content)
+    if has_text and not has_open_call:
+        messages.append({"role": "assistant", "content": content})
+
+
 def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
          model: str | None = None,
          pending_actions: list[dict] | None = None,
@@ -412,7 +441,7 @@ def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
     iterations = 0
     while response.stop_reason == "tool_use":
         if iterations >= max_iterations:
-            messages.append({"role": "assistant", "content": response.content})
+            # This turn is not stored: its tool calls will never get results.
             return (
                 f"I stopped after {max_iterations} tool steps without finishing — "
                 "that usually means I'm going in circles. Could you rephrase or "
@@ -444,7 +473,7 @@ def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
         response = _create(client, model, system, messages)
 
     if response.stop_reason == "refusal":
-        messages.append({"role": "assistant", "content": response.content})
+        _keep_turn(messages, response.content)
         return (
             "I can't help with that one. Try rephrasing, or ask me about your calendar, "
             "email or tasks.",
@@ -458,7 +487,9 @@ def chat(client: anthropic.Anthropic, messages: list[dict], store: DataStore,
         if hasattr(block, "text"):
             final_text += block.text
 
-    # Append final assistant response
-    messages.append({"role": "assistant", "content": response.content})
+    _keep_turn(messages, response.content)
+
+    if not final_text.strip():
+        final_text = "I didn't get to an answer that time. Could you try again, or narrow down what you need?"
 
     return final_text, messages, pending_actions
