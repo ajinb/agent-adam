@@ -11,6 +11,7 @@ import pytest
 from chatbot import (
     DESTRUCTIVE_TOOLS,
     UNTRUSTED_RESULT_TOOLS,
+    ActionFailed,
     approve_pending_action,
     execute_tool,
 )
@@ -68,6 +69,27 @@ def test_approval_executes_the_queued_action():
 
     approve_pending_action(pending[0], store)
     assert store.deleted_tasks == ["t1"]
+
+
+class ReportsFailure(FakeStore):
+    def delete_task(self, task_id):
+        return False
+
+
+class RaisesFailure(FakeStore):
+    def delete_task(self, task_id):
+        raise ConnectionError("token expired")
+
+
+@pytest.mark.parametrize("store, reason", [
+    (ReportsFailure(), "did not go through"),
+    (RaisesFailure(), "token expired"),
+])
+def test_approval_raises_when_the_action_did_not_happen(store, reason):
+    action = {"tool": "delete_task", "input": {"task_id": "t1"}, "summary": "Delete task t1"}
+
+    with pytest.raises(ActionFailed, match=reason):
+        approve_pending_action(action, store)
 
 
 @pytest.mark.parametrize("tool", sorted(UNTRUSTED_RESULT_TOOLS))
